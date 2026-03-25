@@ -1,0 +1,31 @@
+[package]
+name = "pryty-rustbrowser"
+version = "0.1.0"
+edition = "2021"
+description = "One-line browser API hooks for Rust Front-end development"
+license = "MIT"
+keywords = ["dioxus", "web", "browser", "hooks"]
+
+[dependencies]
+dioxus = { version = "0.7", features = ["web"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Navigator",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamTrack",
+    "MediaStreamConstraints",
+    "MediaRecorder",
+    "MediaRecorderOptions",
+    "Blob",
+    "Event",
+    "Clipboard",
+    "Storage",
+    "Geolocation"
+]}
+
+[dev-dependencies]
+dioxus = { version = "0.7", features = ["web", "desktop"] }
