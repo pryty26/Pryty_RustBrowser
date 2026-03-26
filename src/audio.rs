@@ -25,7 +25,7 @@ pub enum RecordingError {
     RecorderCreateFailed(String),
     RecorderStartFailed(String),
     RecorderStopFailed(String),
-    BlobReadFailed(String),
+    RecorderRequestDataFailed(String),
 }
 
 impl core::fmt::Display for RecordingError {
@@ -38,7 +38,9 @@ impl core::fmt::Display for RecordingError {
             RecordingError::RecorderCreateFailed(e) => write!(f, "failed to create recorder: {e}"),
             RecordingError::RecorderStartFailed(e) => write!(f, "failed to start recorder: {e}"),
             RecordingError::RecorderStopFailed(e) => write!(f, "failed to stop recorder: {e}"),
-            RecordingError::BlobReadFailed(e) => write!(f, "failed to read blob: {e}"),
+            RecordingError::RecorderRequestDataFailed(e) => {
+                write!(f, "failed to request recorder data: {e}")
+            }
         }
     }
 }
@@ -53,9 +55,13 @@ pub struct Recording {
 
 impl Recording {
     pub fn is_active(&self) -> bool {
+        matches!(*self.state.read(), RecordingState::Recording)
+    }
+
+    pub fn is_busy(&self) -> bool {
         matches!(
             *self.state.read(),
-            RecordingState::Starting | RecordingState::Recording | RecordingState::Stopping
+            RecordingState::Starting | RecordingState::Stopping
         )
     }
 }
@@ -64,7 +70,6 @@ pub fn use_recording() -> Recording {
     let data = use_signal(|| None::<Vec<u8>>);
     let state = use_signal(|| RecordingState::Idle);
     let last_error = use_signal(|| None::<String>);
-
     let recorder = use_signal(|| None::<MediaRecorder>);
     let stream = use_signal(|| None::<MediaStream>);
     let chunks = use_signal(|| Vec::<Vec<u8>>::new());
@@ -158,18 +163,21 @@ async fn start_recording(
         .media_devices()
         .map_err(|_| RecordingError::MediaDevicesUnavailable)?;
 
-    let mut constraints = MediaStreamConstraints::new();
+    let constraints = MediaStreamConstraints::new();
     constraints.set_audio(&true.into());
 
     let promise = devices
         .get_user_media_with_constraints(&constraints)
         .map_err(|e| RecordingError::GetUserMediaFailed(format!("{e:?}")))?;
+
     let js_val = JsFuture::from(promise)
         .await
         .map_err(|e| RecordingError::GetUserMediaFailed(format!("{e:?}")))?;
+
     let s: MediaStream = js_val
         .dyn_into()
         .map_err(|_| RecordingError::CastMediaStreamFailed)?;
+
     stream.set(Some(s.clone()));
 
     let options = MediaRecorderOptions::new();
@@ -178,13 +186,15 @@ async fn start_recording(
 
     let chunks_for_data = chunks.clone();
     let ondata = Closure::wrap(Box::new(move |e: BlobEvent| {
-        let blob = e.data();
+        let maybe_blob = e.data();
         let mut chunks_inner = chunks_for_data.clone();
 
         spawn(async move {
-            if let Ok(buf) = JsFuture::from(blob.array_buffer()).await {
-                let bytes = Uint8Array::new(&buf).to_vec();
-                chunks_inner.write().push(bytes);
+            if let Some(blob) = maybe_blob {
+                if let Ok(buf) = JsFuture::from(blob.array_buffer()).await {
+                    let bytes = Uint8Array::new(&buf).to_vec();
+                    chunks_inner.write().push(bytes);
+                }
             }
         });
     }) as Box<dyn FnMut(_)>);
@@ -194,9 +204,9 @@ async fn start_recording(
 
     rec.start_with_time_slice(1000)
         .map_err(|e| RecordingError::RecorderStartFailed(format!("{e:?}")))?;
+
     recorder.set(Some(rec));
     state.set(RecordingState::Recording);
-
     Ok(())
 }
 
@@ -211,6 +221,8 @@ fn stop_recording(
     state.set(RecordingState::Stopping);
 
     if let Some(r) = recorder.read().as_ref() {
+        r.request_data()
+            .map_err(|e| RecordingError::RecorderRequestDataFailed(format!("{e:?}")))?;
         r.stop()
             .map_err(|e| RecordingError::RecorderStopFailed(format!("{e:?}")))?;
     }
@@ -229,4 +241,8 @@ fn stop_recording(
     chunks.write().clear();
 
     recorder.set(None);
-    stream*
+    stream.set(None);
+    state.set(RecordingState::Idle);
+
+    Ok(())
+}

@@ -15,15 +15,14 @@
 // ```
 // src/lib.rs
 mod audio;
-mod storage;
-mod clipboard;
 mod camera;
+mod clipboard;
+mod storage;
 
-pub use audio::{use_recording, RecordingError, RecordingState};
-pub use storage::use_storage;
-pub use clipboard::use_clipboard;
-pub use camera::{use_camera, CameraError, CameraState};
-
+pub use audio::{use_recording, Recording, RecordingError, RecordingState};
+pub use camera::{use_camera, Camera, CameraError, CameraState};
+pub use clipboard::{use_clipboard, Clipboard, ClipboardError};
+pub use storage::{read_storage, use_storage, write_storage, StorageError};
 /*
 use dioxus::prelude::*;
 use pryty_rustbrowser::{use_camera, use_clipboard, use_recording, use_storage};

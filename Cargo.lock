@@ -3423,10 +3423,12 @@ dependencies = [
 
 [[package]]
 name = "pryty-rustbrowser"
-version = "0.1.0"
+version = "0.1.1-alpha"
 dependencies = [
  "dioxus",
  "js-sys",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

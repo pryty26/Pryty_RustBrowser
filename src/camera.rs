@@ -41,7 +41,11 @@ pub struct Camera {
 
 impl Camera {
     pub fn is_active(&self) -> bool {
-        matches!(*self.state.read(), CameraState::Starting | CameraState::Active | CameraState::Stopping)
+        matches!(*self.state.read(), CameraState::Active)
+    }
+
+    pub fn is_busy(&self) -> bool {
+        matches!(*self.state.read(), CameraState::Starting | CameraState::Stopping)
     }
 }
 
@@ -102,7 +106,7 @@ async fn start_camera(
         .media_devices()
         .map_err(|_| CameraError::MediaDevicesUnavailable)?;
 
-    let mut constraints = MediaStreamConstraints::new();
+    let constraints = MediaStreamConstraints::new();
     constraints.set_video(&true.into());
 
     let promise = devices
