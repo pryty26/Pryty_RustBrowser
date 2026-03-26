@@ -17,12 +17,12 @@
 mod audio;
 mod storage;
 mod clipboard;
+mod camera;
 
-pub use audio::use_recording;
+pub use audio::{use_recording, RecordingError, RecordingState};
 pub use storage::use_storage;
 pub use clipboard::use_clipboard;
-pub mod camera;
-pub use camera::use_camera;
+pub use camera::{use_camera, CameraError, CameraState};
 
 /*
 use dioxus::prelude::*;

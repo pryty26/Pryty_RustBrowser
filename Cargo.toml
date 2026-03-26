@@ -21,11 +21,12 @@ web-sys = { version = "0.3", features = [
     "MediaRecorder",
     "MediaRecorderOptions",
     "Blob",
+    "BlobEvent",
     "Event",
     "Clipboard",
     "Storage",
     "Geolocation"
-]}
+] }
 
 [dev-dependencies]
 dioxus = { version = "0.7", features = ["web", "desktop"] }
