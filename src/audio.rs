@@ -1,11 +1,15 @@
 use dioxus::prelude::*;
-use js_sys::Uint8Array;
-use wasm_bindgen::{closure::Closure, JsCast};
+use js_sys::{Promise, Uint8Array};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
     BlobEvent, MediaRecorder, MediaRecorderOptions, MediaStream, MediaStreamConstraints,
     MediaStreamTrack,
 };
+/*
+stream = the audio data captured during recording
+chunks = stored stream that is organized
+*/
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecordingState {
@@ -45,8 +49,75 @@ impl core::fmt::Display for RecordingError {
     }
 }
 
+pub struct AudioQualityConfig {
+    pub name: &'static str,
+    pub sample_rate: f64,
+    pub sample_size: u32,
+    pub channel_count: u32,
+    pub bits_per_second: u32,
+    pub mime_type: &'static str,
+}
+
+impl AudioQualityConfig {
+    pub fn low() -> Self {
+        Self {
+            name: "Low quality (voice call)",
+            sample_rate: 22050.0,
+            sample_size: 16,
+            channel_count: 1,
+            bits_per_second: 64000,
+            mime_type: "audio/webm;codecs=opus",
+        }
+    }
+
+    pub fn normal() -> Self {
+        Self {
+            name: "Standard quality",
+            sample_rate: 44100.0,
+            sample_size: 16,
+            channel_count: 1,
+            bits_per_second: 128000,
+            mime_type: "audio/webm;codecs=opus",
+        }
+    }
+
+    pub fn high() -> Self {
+        Self {
+            name: "High quality",
+            sample_rate: 48000.0,
+            sample_size: 24,
+            channel_count: 2,
+            bits_per_second: 192000,
+            mime_type: "audio/webm;codecs=opus",
+        }
+    }
+
+    pub fn studio() -> Self {
+        Self {
+            name: "Studio quality",
+            sample_rate: 96000.0,
+            sample_size: 24,
+            channel_count: 2,
+            bits_per_second: 320000,
+            mime_type: "audio/webm;codecs=opus",
+        }
+    }
+
+    pub fn lossless() -> Self {
+        Self {
+            name: "Lossless quality",
+            sample_rate: 48000.0,
+            sample_size: 32,
+            channel_count: 2,
+            bits_per_second: 0,
+            mime_type: "audio/webm;codecs=pcm",
+        }
+    }
+}
+
 pub struct Recording {
     pub start: Callback<()>,
+    pub start_with_quality: Callback<AudioQualityConfig>,
     pub stop: Callback<()>,
     pub data: Signal<Option<Vec<u8>>>,
     pub state: Signal<RecordingState>,
@@ -75,11 +146,11 @@ pub fn use_recording() -> Recording {
     let chunks = use_signal(|| Vec::<Vec<u8>>::new());
 
     let start = {
-        let mut state = state.clone();
-        let mut last_error = last_error.clone();
-        let mut recorder = recorder.clone();
-        let mut stream = stream.clone();
-        let mut chunks = chunks.clone();
+        let state = state.clone();
+        let last_error = last_error.clone();
+        let recorder = recorder.clone();
+        let stream = stream.clone();
+        let chunks = chunks.clone();
 
         use_callback(move |_| {
             let mut state = state.clone();
@@ -98,6 +169,41 @@ pub fn use_recording() -> Recording {
                 )
                 .await
                 {
+                    // if error then change error msg
+                    let msg = e.to_string();
+                    state.set(RecordingState::Error(msg.clone()));
+                    last_error.set(Some(msg));
+                }
+            });
+        })
+    };
+
+    let start_with_quality = {
+        let state = state.clone();
+        let last_error = last_error.clone();
+        let recorder = recorder.clone();
+        let stream = stream.clone();
+        let chunks = chunks.clone();
+
+        use_callback(move |quality: AudioQualityConfig| {
+            let mut state = state.clone();
+            let mut last_error = last_error.clone();
+            let mut recorder = recorder.clone();
+            let mut stream = stream.clone();
+            let mut chunks = chunks.clone();
+
+            spawn(async move {
+                if let Err(e) = start_rec_with_quality(
+                    &mut state,
+                    &mut last_error,
+                    &mut recorder,
+                    &mut stream,
+                    &mut chunks,
+                    Some(quality),
+                )
+                .await
+                {
+                    // if error then change error msg
                     let msg = e.to_string();
                     state.set(RecordingState::Error(msg.clone()));
                     last_error.set(Some(msg));
@@ -107,12 +213,12 @@ pub fn use_recording() -> Recording {
     };
 
     let stop = {
-        let mut data = data.clone();
-        let mut state = state.clone();
-        let mut last_error = last_error.clone();
-        let mut recorder = recorder.clone();
-        let mut stream = stream.clone();
-        let mut chunks = chunks.clone();
+        let data = data.clone();
+        let state = state.clone();
+        let last_error = last_error.clone();
+        let recorder = recorder.clone();
+        let stream = stream.clone();
+        let chunks = chunks.clone();
 
         use_callback(move |_| {
             let mut data = data.clone();
@@ -139,6 +245,7 @@ pub fn use_recording() -> Recording {
 
     Recording {
         start,
+        start_with_quality,
         stop,
         data,
         state,
@@ -153,10 +260,37 @@ async fn start_recording(
     stream: &mut Signal<Option<MediaStream>>,
     chunks: &mut Signal<Vec<Vec<u8>>>,
 ) -> Result<(), RecordingError> {
+    start_rec_with_quality(
+        state,
+        last_error,
+        recorder,
+        stream,
+        chunks,
+        None,
+    )
+    .await
+}
+
+pub async fn start_rec_with_quality(
+    state: &mut Signal<RecordingState>,
+    last_error: &mut Signal<Option<String>>,
+    recorder: &mut Signal<Option<MediaRecorder>>,
+    stream: &mut Signal<Option<MediaStream>>,
+    chunks: &mut Signal<Vec<Vec<u8>>>,
+    quality: Option<AudioQualityConfig>,
+) -> Result<(), RecordingError> {
     state.set(RecordingState::Starting);
+    if let Some(s) = stream.read().as_ref() {
+        let tracks = s.get_tracks();
+        for i in 0..tracks.length() {
+            if let Ok(track) = tracks.get(i).dyn_into::<MediaStreamTrack>() {
+                track.stop();
+            }
+        }
+    }
     last_error.set(None);
     chunks.write().clear();
-
+    stream.set(None);
     let window = web_sys::window().ok_or(RecordingError::WindowUnavailable)?;
     let devices = window
         .navigator()
@@ -166,12 +300,12 @@ async fn start_recording(
     let constraints = MediaStreamConstraints::new();
     constraints.set_audio(&true.into());
 
-    let promise = devices
+    let promise:Promise = devices
         .get_user_media_with_constraints(&constraints)
         .map_err(|e| RecordingError::GetUserMediaFailed(format!("{e:?}")))?;
 
-    let js_val = JsFuture::from(promise)
-        .await
+    let js_val:JsValue = JsFuture::from(promise)
+        .await // JavascriptValue -> Rust's future value
         .map_err(|e| RecordingError::GetUserMediaFailed(format!("{e:?}")))?;
 
     let s: MediaStream = js_val
@@ -181,6 +315,13 @@ async fn start_recording(
     stream.set(Some(s.clone()));
 
     let options = MediaRecorderOptions::new();
+    if let Some(q) = quality {
+        options.set_mime_type(q.mime_type);
+        if q.bits_per_second > 0 {
+            options.set_audio_bits_per_second(q.bits_per_second);
+        }
+    }
+
     let rec = MediaRecorder::new_with_media_stream_and_media_recorder_options(&s, &options)
         .map_err(|e| RecordingError::RecorderCreateFailed(format!("{e:?}")))?;
 
@@ -192,16 +333,18 @@ async fn start_recording(
         spawn(async move {
             if let Some(blob) = maybe_blob {
                 if let Ok(buf) = JsFuture::from(blob.array_buffer()).await {
-                    let bytes = Uint8Array::new(&buf).to_vec();
+                    let bytes = Uint8Array::new(&buf).to_vec(); // jsfuture -> array buffer
+                    // array buffer -> vec<u8> (array buffer cant read or write so we need vec<u8>)
                     chunks_inner.write().push(bytes);
                 }
             }
         });
     }) as Box<dyn FnMut(_)>);
 
-    rec.set_ondataavailable(Some(ondata.as_ref().unchecked_ref()));
-    ondata.forget();
-
+    rec.set_ondataavailable(Some(ondata.as_ref().unchecked_ref())); // ptr -> js ptr
+    ondata.forget(); /*If we forget to free it, Rust won't free the memory — it will just let the browser free it.
+     Otherwise, it could lead to double free or similar issues.(Bad things!☆*: .｡. o(≧▽≦)o .｡.:*☆)
+ */
     rec.start_with_time_slice(1000)
         .map_err(|e| RecordingError::RecorderStartFailed(format!("{e:?}")))?;
 
@@ -221,7 +364,7 @@ fn stop_recording(
     state.set(RecordingState::Stopping);
 
     if let Some(r) = recorder.read().as_ref() {
-        r.request_data()
+        r.request_data() // get data
             .map_err(|e| RecordingError::RecorderRequestDataFailed(format!("{e:?}")))?;
         r.stop()
             .map_err(|e| RecordingError::RecorderStopFailed(format!("{e:?}")))?;

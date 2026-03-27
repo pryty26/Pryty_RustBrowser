@@ -62,6 +62,7 @@ fn App() -> Element {
                     onclick: move |_| camera.start.call(()),
                     disabled: *camera.active.read(),
                     "Start Camera"
+                    
                 }
                 button {
                     onclick: move |_| camera.stop.call(()),
@@ -75,6 +76,10 @@ fn App() -> Element {
                 button {
                     onclick: move |_| recording.start.call(()),
                     disabled: *recording.active.read(),
+                    "Start Recording"
+                }
+                button {
+                    onclick: move |_| recording.start_with_quality.call(AudioQualityConfig::high()),
                     "Start Recording"
                 }
                 button {
