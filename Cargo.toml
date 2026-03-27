@@ -18,6 +18,7 @@ web-sys = { version = "0.3", features = [
     "MediaStream",
     "MediaStreamTrack",
     "MediaStreamConstraints",
+    "MediaTrackConstraints",
     "MediaRecorder",
     "MediaRecorderOptions",
     "Blob",

@@ -19,8 +19,20 @@ mod camera;
 mod clipboard;
 mod storage;
 
-pub use audio::{use_recording, Recording, RecordingError, RecordingState};
-pub use camera::{use_camera, Camera, CameraError, CameraState};
+pub use audio::{
+    use_recording,
+    AudioQualityConfig,
+    Recording,
+    RecordingError,
+    RecordingState,
+};
+pub use camera::{
+    use_camera,
+    Camera,
+    CameraError,
+    CameraQualityConfig,
+    CameraState,
+};
 pub use clipboard::{use_clipboard, Clipboard, ClipboardError};
 pub use storage::{read_storage, use_storage, write_storage, StorageError};
 /*
