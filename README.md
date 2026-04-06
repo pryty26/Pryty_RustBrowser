@@ -31,6 +31,7 @@ Creates a recording controller.
 `Recording` fields:
 
 - `start: Callback<()>`
+- `start_with_quality: Callback<AudioQualityConfig>`
 - `stop: Callback<()>`
 - `data: Signal<Option<Vec<u8>>>`
 - `state: Signal<RecordingState>`
@@ -62,6 +63,29 @@ Creates a recording controller.
 - `RecorderStopFailed(String)`
 - `RecorderRequestDataFailed(String)`
 
+#### `AudioQualityConfig`
+
+Controls the audio encoder settings passed to `start_with_quality`.
+
+Fields:
+
+- `name: &'static str` — human-readable label
+- `sample_rate: f64`
+- `sample_size: u32`
+- `channel_count: u32`
+- `bits_per_second: u32` — `0` means codec default (used for lossless)
+- `mime_type: &'static str`
+
+Presets:
+
+| Method | Description |
+|---|---|
+| `AudioQualityConfig::low()` | 22 kHz mono, 64 kbps — voice calls |
+| `AudioQualityConfig::normal()` | 44.1 kHz mono, 128 kbps — standard |
+| `AudioQualityConfig::high()` | 48 kHz stereo, 192 kbps |
+| `AudioQualityConfig::studio()` | 96 kHz stereo, 320 kbps |
+| `AudioQualityConfig::lossless()` | 48 kHz stereo PCM, no bit-rate cap |
+
 ---
 
 ### Camera
@@ -73,6 +97,7 @@ Creates a camera controller.
 `Camera` fields:
 
 - `start: Callback<()>`
+- `start_with_quality: Callback<CameraQualityConfig>`
 - `stop: Callback<()>`
 - `stream: Signal<Option<web_sys::MediaStream>>`
 - `state: Signal<CameraState>`
@@ -99,6 +124,25 @@ Creates a camera controller.
 - `MediaDevicesUnavailable`
 - `GetUserMediaFailed(String)`
 - `CastMediaStreamFailed`
+
+#### `CameraQualityConfig`
+
+Controls the video resolution and frame rate passed to `start_with_quality`.
+
+Fields:
+
+- `name: &'static str` — human-readable label
+- `width: u32`
+- `height: u32`
+- `frame_rate: f64`
+
+Presets:
+
+| Method | Description |
+|---|---|
+| `CameraQualityConfig::low()` | 640×480 @ 15 fps |
+| `CameraQualityConfig::hd()` | 1280×720 @ 30 fps |
+| `CameraQualityConfig::full_hd()` | 1920×1080 @ 60 fps |
 
 ---
 
@@ -160,8 +204,8 @@ Creates clipboard helper.
 ## Re-exports
 
 ```rust
-pub use audio::{use_recording, Recording, RecordingError, RecordingState};
-pub use camera::{use_camera, Camera, CameraError, CameraState};
+pub use audio::{use_recording, AudioQualityConfig, Recording, RecordingError, RecordingState};
+pub use camera::{use_camera, Camera, CameraError, CameraQualityConfig, CameraState};
 pub use clipboard::{use_clipboard, Clipboard, ClipboardError};
 pub use storage::{read_storage, use_storage, write_storage, StorageError};
 ```
@@ -213,7 +257,33 @@ fn RecordingDemo() -> Element {
 }
 ```
 
-### 2) Camera
+### 2) Recording with quality preset
+
+```rust
+use dioxus::prelude::*;
+use pryty_rustbrowser::*;
+
+#[component]
+fn RecordingQualityDemo() -> Element {
+    let recording = use_recording();
+
+    rsx! {
+        button {
+            onclick: move |_| recording.start_with_quality.call(AudioQualityConfig::high()),
+            disabled: recording.is_active() || recording.is_busy(),
+            "Start High-Quality Recording"
+        }
+        button {
+            onclick: move |_| recording.stop.call(()),
+            disabled: !recording.is_active(),
+            "Stop Recording"
+        }
+        p { "State: {recording.state.read():?}" }
+    }
+}
+```
+
+### 3) Camera
 
 ```rust
 use dioxus::prelude::*;
@@ -246,7 +316,33 @@ fn CameraDemo() -> Element {
 }
 ```
 
-### 3) Typed storage
+### 4) Camera with quality preset
+
+```rust
+use dioxus::prelude::*;
+use pryty_rustbrowser::*;
+
+#[component]
+fn CameraQualityDemo() -> Element {
+    let camera = use_camera();
+
+    rsx! {
+        button {
+            onclick: move |_| camera.start_with_quality.call(CameraQualityConfig::hd()),
+            disabled: camera.is_active() || camera.is_busy(),
+            "Start HD Camera"
+        }
+        button {
+            onclick: move |_| camera.stop.call(()),
+            disabled: !camera.is_active(),
+            "Stop Camera"
+        }
+        p { "State: {camera.state.read():?}" }
+    }
+}
+```
+
+### 5) Typed storage
 
 ```rust
 use dioxus::prelude::*;
@@ -272,7 +368,7 @@ fn StorageDemo() -> Element {
 }
 ```
 
-### 4) Clipboard
+### 6) Clipboard
 
 ```rust
 use dioxus::prelude::*;
