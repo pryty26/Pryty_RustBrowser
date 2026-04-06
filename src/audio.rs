@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 use js_sys::{Promise, Uint8Array};
-use wasm_bindgen::{JsCast, JsValue, closure::Closure};
+use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
     BlobEvent, MediaRecorder, MediaRecorderOptions, MediaStream, MediaStreamConstraints,
@@ -16,6 +16,7 @@ pub enum RecordingState {
     Idle,
     Starting,
     Recording,
+    Paused,
     Stopping,
     Error(String),
 }
@@ -30,6 +31,8 @@ pub enum RecordingError {
     RecorderStartFailed(String),
     RecorderStopFailed(String),
     RecorderRequestDataFailed(String),
+    RecorderPauseFailed(String),
+    RecorderResumeFailed(String),
 }
 
 impl core::fmt::Display for RecordingError {
@@ -45,6 +48,8 @@ impl core::fmt::Display for RecordingError {
             RecordingError::RecorderRequestDataFailed(e) => {
                 write!(f, "failed to request recorder data: {e}")
             }
+            RecordingError::RecorderPauseFailed(e) => write!(f, "failed to pause recorder: {e}"),
+            RecordingError::RecorderResumeFailed(e) => write!(f, "failed to resume recorder: {e}"),
         }
     }
 }
@@ -118,6 +123,8 @@ impl AudioQualityConfig {
 pub struct Recording {
     pub start: Callback<()>,
     pub start_with_quality: Callback<AudioQualityConfig>,
+    pub pause: Callback<()>,
+    pub resume: Callback<()>,
     pub stop: Callback<()>,
     pub data: Signal<Option<Vec<u8>>>,
     pub state: Signal<RecordingState>,
@@ -127,6 +134,10 @@ pub struct Recording {
 impl Recording {
     pub fn is_active(&self) -> bool {
         matches!(*self.state.read(), RecordingState::Recording)
+    }
+
+    pub fn is_paused(&self) -> bool {
+        matches!(*self.state.read(), RecordingState::Paused)
     }
 
     pub fn is_busy(&self) -> bool {
@@ -160,14 +171,9 @@ pub fn use_recording() -> Recording {
             let mut chunks = chunks.clone();
 
             spawn(async move {
-                if let Err(e) = start_recording(
-                    &mut state,
-                    &mut last_error,
-                    &mut recorder,
-                    &mut stream,
-                    &mut chunks,
-                )
-                .await
+                if let Err(e) =
+                    start_recording(&mut state, &mut last_error, &mut recorder, &mut stream, &mut chunks)
+                        .await
                 {
                     // if error then change error msg
                     let msg = e.to_string();
@@ -212,6 +218,42 @@ pub fn use_recording() -> Recording {
         })
     };
 
+    let pause = {
+        let state = state.clone();
+        let last_error = last_error.clone();
+        let recorder = recorder.clone();
+
+        use_callback(move |_| {
+            let mut state = state.clone();
+            let mut last_error = last_error.clone();
+            let mut recorder = recorder.clone();
+
+            if let Err(e) = pause_recording(&mut state, &mut last_error, &mut recorder) {
+                let msg = e.to_string();
+                state.set(RecordingState::Error(msg.clone()));
+                last_error.set(Some(msg));
+            }
+        })
+    };
+
+    let resume = {
+        let state = state.clone();
+        let last_error = last_error.clone();
+        let recorder = recorder.clone();
+
+        use_callback(move |_| {
+            let mut state = state.clone();
+            let mut last_error = last_error.clone();
+            let mut recorder = recorder.clone();
+
+            if let Err(e) = resume_recording(&mut state, &mut last_error, &mut recorder) {
+                let msg = e.to_string();
+                state.set(RecordingState::Error(msg.clone()));
+                last_error.set(Some(msg));
+            }
+        })
+    };
+
     let stop = {
         let data = data.clone();
         let state = state.clone();
@@ -246,6 +288,8 @@ pub fn use_recording() -> Recording {
     Recording {
         start,
         start_with_quality,
+        pause,
+        resume,
         stop,
         data,
         state,
@@ -260,15 +304,7 @@ async fn start_recording(
     stream: &mut Signal<Option<MediaStream>>,
     chunks: &mut Signal<Vec<Vec<u8>>>,
 ) -> Result<(), RecordingError> {
-    start_rec_with_quality(
-        state,
-        last_error,
-        recorder,
-        stream,
-        chunks,
-        None,
-    )
-    .await
+    start_rec_with_quality(state, last_error, recorder, stream, chunks, None).await
 }
 
 pub async fn start_rec_with_quality(
@@ -279,6 +315,13 @@ pub async fn start_rec_with_quality(
     chunks: &mut Signal<Vec<Vec<u8>>>,
     quality: Option<AudioQualityConfig>,
 ) -> Result<(), RecordingError> {
+    if matches!(
+        *state.read(),
+        RecordingState::Starting | RecordingState::Recording | RecordingState::Paused
+    ) {
+        return Ok(());
+    }
+
     state.set(RecordingState::Starting);
     if let Some(s) = stream.read().as_ref() {
         let tracks = s.get_tracks();
@@ -300,12 +343,12 @@ pub async fn start_rec_with_quality(
     let constraints = MediaStreamConstraints::new();
     constraints.set_audio(&true.into());
 
-    let promise:Promise = devices
+    let promise: Promise = devices
         .get_user_media_with_constraints(&constraints)
         .map_err(|e| RecordingError::GetUserMediaFailed(format!("{e:?}")))?;
 
-    let js_val:JsValue = JsFuture::from(promise)
-        .await // JavascriptValue -> Rust's future value
+    let js_val: JsValue = JsFuture::from(promise)
+        .await
         .map_err(|e| RecordingError::GetUserMediaFailed(format!("{e:?}")))?;
 
     let s: MediaStream = js_val
@@ -333,15 +376,14 @@ pub async fn start_rec_with_quality(
         spawn(async move {
             if let Some(blob) = maybe_blob {
                 if let Ok(buf) = JsFuture::from(blob.array_buffer()).await {
-                    let bytes = Uint8Array::new(&buf).to_vec(); // jsfuture -> array buffer
-                    // array buffer -> vec<u8> (array buffer cant read or write so we need vec<u8>)
+                    let bytes = Uint8Array::new(&buf).to_vec();
                     chunks_inner.write().push(bytes);
                 }
             }
         });
     }) as Box<dyn FnMut(_)>);
 
-    rec.set_ondataavailable(Some(ondata.as_ref().unchecked_ref())); // ptr -> js ptr
+    rec.set_ondataavailable(Some(ondata.as_ref().unchecked_ref()));
     ondata.forget(); /*If we forget to free it, Rust won't free the memory — it will just let the browser free it.
      Otherwise, it could lead to double free or similar issues.(Bad things!☆*: .｡. o(≧▽≦)o .｡.:*☆)
  */
@@ -353,6 +395,44 @@ pub async fn start_rec_with_quality(
     Ok(())
 }
 
+fn pause_recording(
+    state: &mut Signal<RecordingState>,
+    _last_error: &mut Signal<Option<String>>,
+    recorder: &mut Signal<Option<MediaRecorder>>,
+) -> Result<(), RecordingError> {
+    if !matches!(*state.read(), RecordingState::Recording) {
+        return Ok(());
+    }
+
+    if let Some(r) = recorder.read().as_ref() {
+        r.request_data()
+            .map_err(|e| RecordingError::RecorderRequestDataFailed(format!("{e:?}")))?;
+        r.pause()
+            .map_err(|e| RecordingError::RecorderPauseFailed(format!("{e:?}")))?;
+        state.set(RecordingState::Paused);
+    }
+
+    Ok(())
+}
+
+fn resume_recording(
+    state: &mut Signal<RecordingState>,
+    _last_error: &mut Signal<Option<String>>,
+    recorder: &mut Signal<Option<MediaRecorder>>,
+) -> Result<(), RecordingError> {
+    if !matches!(*state.read(), RecordingState::Paused) {
+        return Ok(());
+    }
+
+    if let Some(r) = recorder.read().as_ref() {
+        r.resume()
+            .map_err(|e| RecordingError::RecorderResumeFailed(format!("{e:?}")))?;
+        state.set(RecordingState::Recording);
+    }
+
+    Ok(())
+}
+
 fn stop_recording(
     data: &mut Signal<Option<Vec<u8>>>,
     state: &mut Signal<RecordingState>,
@@ -361,10 +441,14 @@ fn stop_recording(
     stream: &mut Signal<Option<MediaStream>>,
     chunks: &mut Signal<Vec<Vec<u8>>>,
 ) -> Result<(), RecordingError> {
+    if matches!(*state.read(), RecordingState::Idle) {
+        return Ok(());
+    }
+
     state.set(RecordingState::Stopping);
 
     if let Some(r) = recorder.read().as_ref() {
-        r.request_data() // get data
+        r.request_data()
             .map_err(|e| RecordingError::RecorderRequestDataFailed(format!("{e:?}")))?;
         r.stop()
             .map_err(|e| RecordingError::RecorderStopFailed(format!("{e:?}")))?;
