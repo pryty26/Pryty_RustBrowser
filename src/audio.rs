@@ -111,7 +111,7 @@ impl AudioQualityConfig {
     pub fn lossless() -> Self {
         Self {
             name: "Lossless quality",
-            sample_rate: 48000.0,
+            sample_rate: 96000.0,
             sample_size: 32,
             channel_count: 2,
             bits_per_second: 0,
