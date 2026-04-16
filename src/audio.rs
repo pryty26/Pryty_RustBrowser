@@ -138,6 +138,9 @@ pub struct Recording {
     pub data: Signal<Option<Vec<u8>>>,
     pub state: Signal<RecordingState>,
     pub last_error: Signal<Option<String>>,
+    recorder: Signal<Option<MediaRecorder>>,
+    stream: Signal<Option<MediaStream>>,
+    chunks: Signal<Vec<Vec<u8>>>,
 }
 
 impl Recording {
@@ -165,9 +168,9 @@ impl Drop for Recording {
             &mut self.data,
             &mut self.state,
             &mut self.last_error,
-            &mut Signal::new_in_scope(None::<MediaRecorder>, ScopeId::ROOT),
-            &mut Signal::new_in_scope(None::<MediaStream>, ScopeId::ROOT),
-            &mut Signal::new_in_scope(Vec::<Vec<u8>>::new(), ScopeId::ROOT),
+            &mut self.recorder,
+            &mut self.stream,
+            &mut self.chunks,
         );
     }
 }
@@ -195,9 +198,14 @@ pub fn use_recording() -> Recording {
             let mut chunks = chunks.clone();
 
             spawn(async move {
-                if let Err(e) =
-                    start_recording(&mut state, &mut last_error, &mut recorder, &mut stream, &mut chunks)
-                        .await
+                if let Err(e) = start_recording(
+                    &mut state,
+                    &mut last_error,
+                    &mut recorder,
+                    &mut stream,
+                    &mut chunks,
+                )
+                .await
                 {
                     // if error then change error msg
                     let msg = e.to_string();
@@ -391,6 +399,9 @@ pub fn use_recording() -> Recording {
         data,
         state,
         last_error,
+        recorder,
+        stream,
+        chunks,
     }
 }
 
@@ -501,7 +512,11 @@ pub async fn start_rec_with_quality_and_config(
     rec.start_with_time_slice(time_slice)
         .map_err(|e| RecordingError::RecorderStartFailed(format!("{e:?}")))?;
 
+    recorder.set(Some(rec));
+    state.set(RecordingState::Recording);
+
     if let Some(max_duration) = config.and_then(|c| c.max_duration) {
+        let mut data_for_timeout = Signal::new(None::<Vec<u8>>);
         let mut state_for_timeout = state.clone();
         let mut last_error_for_timeout = last_error.clone();
         let mut recorder_for_timeout = recorder.clone();
@@ -511,7 +526,7 @@ pub async fn start_rec_with_quality_and_config(
         spawn(async move {
             gloo_timers::future::TimeoutFuture::new(max_duration).await;
             let _ = stop_recording(
-                &mut Signal::new_in_scope(None::<Vec<u8>>, ScopeId::ROOT),
+                &mut data_for_timeout,
                 &mut state_for_timeout,
                 &mut last_error_for_timeout,
                 &mut recorder_for_timeout,
@@ -521,8 +536,6 @@ pub async fn start_rec_with_quality_and_config(
         });
     }
 
-    recorder.set(Some(rec));
-    state.set(RecordingState::Recording);
     Ok(())
 }
 
