@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 use js_sys::{Promise, Uint8Array};
+use std::convert::TryFrom;
 use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
@@ -198,14 +199,9 @@ pub fn use_recording() -> Recording {
             let mut chunks = chunks.clone();
 
             spawn(async move {
-                if let Err(e) = start_recording(
-                    &mut state,
-                    &mut last_error,
-                    &mut recorder,
-                    &mut stream,
-                    &mut chunks,
-                )
-                .await
+                if let Err(e) =
+                    start_recording(&mut state, &mut last_error, &mut recorder, &mut stream, &mut chunks)
+                        .await
                 {
                     // if error then change error msg
                     let msg = e.to_string();
@@ -508,7 +504,9 @@ pub async fn start_rec_with_quality_and_config(
      Otherwise, it could lead to double free or similar issues.(Bad things!☆*: .｡. o(≧▽≦)o .｡.:*☆)
  */
 
-    let time_slice = config.and_then(|c| c.time_slice).unwrap_or(1000);
+    let time_slice_u32 = config.and_then(|c| c.time_slice).unwrap_or(1000);
+    let time_slice = i32::try_from(time_slice_u32)
+        .map_err(|_| RecordingError::RecorderStartFailed("time_slice out of i32 range".to_string()))?;
     rec.start_with_time_slice(time_slice)
         .map_err(|e| RecordingError::RecorderStartFailed(format!("{e:?}")))?;
 
@@ -516,15 +514,14 @@ pub async fn start_rec_with_quality_and_config(
     state.set(RecordingState::Recording);
 
     if let Some(max_duration) = config.and_then(|c| c.max_duration) {
-        let mut data_for_timeout = Signal::new(None::<Vec<u8>>);
+        let mut data_for_timeout = use_signal(|| None::<Vec<u8>>);
         let mut state_for_timeout = state.clone();
         let mut last_error_for_timeout = last_error.clone();
         let mut recorder_for_timeout = recorder.clone();
         let mut stream_for_timeout = stream.clone();
         let mut chunks_for_timeout = chunks.clone();
 
-        spawn(async move {
-            gloo_timers::future::TimeoutFuture::new(max_duration).await;
+        let timeout_cb = Closure::once_into_js(move || {
             let _ = stop_recording(
                 &mut data_for_timeout,
                 &mut state_for_timeout,
@@ -534,6 +531,17 @@ pub async fn start_rec_with_quality_and_config(
                 &mut chunks_for_timeout,
             );
         });
+
+        let window = web_sys::window().ok_or(RecordingError::WindowUnavailable)?;
+        let timeout_i32 = i32::try_from(max_duration)
+            .map_err(|_| RecordingError::RecorderStartFailed("max_duration out of i32 range".to_string()))?;
+
+        window
+            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                timeout_cb.as_ref().unchecked_ref(),
+                timeout_i32,
+            )
+            .map_err(|e| RecordingError::RecorderStartFailed(format!("{e:?}")))?;
     }
 
     Ok(())

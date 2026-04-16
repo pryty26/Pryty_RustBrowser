@@ -1,6 +1,6 @@
 [package]
 name = "pryty-rustbrowser"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "One-line browser API hooks for Rust Front-end development"
 license = "MIT OR Apache-2.0"

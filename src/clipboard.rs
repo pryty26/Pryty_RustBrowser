@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 use wasm_bindgen_futures::JsFuture;
-
+use wasm_bindgen::JsValue;
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClipboardError {
     WindowUnavailable,
@@ -45,7 +45,7 @@ impl Clipboard {
         let window = web_sys::window().ok_or(ClipboardError::WindowUnavailable)?;
         let clipboard = window.navigator().clipboard();
 
-        let value = JsFuture::from(clipboard.read_text())
+        let value:JsValue = JsFuture::from(clipboard.read_text())
             .await
             .map_err(|e| ClipboardError::ReadFailed(format!("{e:?}")))?;
 
