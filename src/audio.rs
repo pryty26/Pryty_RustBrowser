@@ -120,9 +120,18 @@ impl AudioQualityConfig {
     }
 }
 
+// 建议增加的功能
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RecordingConfig {
+    pub time_slice: Option<u32>,  // 可配置数据块间隔
+    pub max_duration: Option<u32>, // 最大录音时长
+}
+
 pub struct Recording {
     pub start: Callback<()>,
     pub start_with_quality: Callback<AudioQualityConfig>,
+    pub start_with_config: Callback<RecordingConfig>,
+    pub start_with_quality_and_config: Callback<(AudioQualityConfig, RecordingConfig)>,
     pub pause: Callback<()>,
     pub resume: Callback<()>,
     pub stop: Callback<()>,
@@ -145,6 +154,21 @@ impl Recording {
             *self.state.read(),
             RecordingState::Starting | RecordingState::Stopping
         )
+    }
+}
+
+// 更好的资源清理
+impl Drop for Recording {
+    fn drop(&mut self) {
+        // 增加手动drop减少内存问题
+        let _ = stop_recording(
+            &mut self.data,
+            &mut self.state,
+            &mut self.last_error,
+            &mut Signal::new_in_scope(None::<MediaRecorder>, ScopeId::ROOT),
+            &mut Signal::new_in_scope(None::<MediaStream>, ScopeId::ROOT),
+            &mut Signal::new_in_scope(Vec::<Vec<u8>>::new(), ScopeId::ROOT),
+        );
     }
 }
 
@@ -199,13 +223,84 @@ pub fn use_recording() -> Recording {
             let mut chunks = chunks.clone();
 
             spawn(async move {
-                if let Err(e) = start_rec_with_quality(
+                if let Err(e) = start_rec_with_quality_and_config(
                     &mut state,
                     &mut last_error,
                     &mut recorder,
                     &mut stream,
                     &mut chunks,
                     Some(quality),
+                    None,
+                )
+                .await
+                {
+                    // if error then change error msg
+                    let msg = e.to_string();
+                    state.set(RecordingState::Error(msg.clone()));
+                    last_error.set(Some(msg));
+                }
+            });
+        })
+    };
+
+    let start_with_config = {
+        let state = state.clone();
+        let last_error = last_error.clone();
+        let recorder = recorder.clone();
+        let stream = stream.clone();
+        let chunks = chunks.clone();
+
+        use_callback(move |config: RecordingConfig| {
+            let mut state = state.clone();
+            let mut last_error = last_error.clone();
+            let mut recorder = recorder.clone();
+            let mut stream = stream.clone();
+            let mut chunks = chunks.clone();
+
+            spawn(async move {
+                if let Err(e) = start_rec_with_quality_and_config(
+                    &mut state,
+                    &mut last_error,
+                    &mut recorder,
+                    &mut stream,
+                    &mut chunks,
+                    None,
+                    Some(config),
+                )
+                .await
+                {
+                    // if error then change error msg
+                    let msg = e.to_string();
+                    state.set(RecordingState::Error(msg.clone()));
+                    last_error.set(Some(msg));
+                }
+            });
+        })
+    };
+
+    let start_with_quality_and_config = {
+        let state = state.clone();
+        let last_error = last_error.clone();
+        let recorder = recorder.clone();
+        let stream = stream.clone();
+        let chunks = chunks.clone();
+
+        use_callback(move |(quality, config): (AudioQualityConfig, RecordingConfig)| {
+            let mut state = state.clone();
+            let mut last_error = last_error.clone();
+            let mut recorder = recorder.clone();
+            let mut stream = stream.clone();
+            let mut chunks = chunks.clone();
+
+            spawn(async move {
+                if let Err(e) = start_rec_with_quality_and_config(
+                    &mut state,
+                    &mut last_error,
+                    &mut recorder,
+                    &mut stream,
+                    &mut chunks,
+                    Some(quality),
+                    Some(config),
                 )
                 .await
                 {
@@ -288,6 +383,8 @@ pub fn use_recording() -> Recording {
     Recording {
         start,
         start_with_quality,
+        start_with_config,
+        start_with_quality_and_config,
         pause,
         resume,
         stop,
@@ -304,7 +401,7 @@ async fn start_recording(
     stream: &mut Signal<Option<MediaStream>>,
     chunks: &mut Signal<Vec<Vec<u8>>>,
 ) -> Result<(), RecordingError> {
-    start_rec_with_quality(state, last_error, recorder, stream, chunks, None).await
+    start_rec_with_quality_and_config(state, last_error, recorder, stream, chunks, None, None).await
 }
 
 pub async fn start_rec_with_quality(
@@ -314,6 +411,18 @@ pub async fn start_rec_with_quality(
     stream: &mut Signal<Option<MediaStream>>,
     chunks: &mut Signal<Vec<Vec<u8>>>,
     quality: Option<AudioQualityConfig>,
+) -> Result<(), RecordingError> {
+    start_rec_with_quality_and_config(state, last_error, recorder, stream, chunks, quality, None).await
+}
+
+pub async fn start_rec_with_quality_and_config(
+    state: &mut Signal<RecordingState>,
+    last_error: &mut Signal<Option<String>>,
+    recorder: &mut Signal<Option<MediaRecorder>>,
+    stream: &mut Signal<Option<MediaStream>>,
+    chunks: &mut Signal<Vec<Vec<u8>>>,
+    quality: Option<AudioQualityConfig>,
+    config: Option<RecordingConfig>,
 ) -> Result<(), RecordingError> {
     if matches!(
         *state.read(),
@@ -387,8 +496,30 @@ pub async fn start_rec_with_quality(
     ondata.forget(); /*If we forget to free it, Rust won't free the memory — it will just let the browser free it.
      Otherwise, it could lead to double free or similar issues.(Bad things!☆*: .｡. o(≧▽≦)o .｡.:*☆)
  */
-    rec.start_with_time_slice(1000)
+
+    let time_slice = config.and_then(|c| c.time_slice).unwrap_or(1000);
+    rec.start_with_time_slice(time_slice)
         .map_err(|e| RecordingError::RecorderStartFailed(format!("{e:?}")))?;
+
+    if let Some(max_duration) = config.and_then(|c| c.max_duration) {
+        let mut state_for_timeout = state.clone();
+        let mut last_error_for_timeout = last_error.clone();
+        let mut recorder_for_timeout = recorder.clone();
+        let mut stream_for_timeout = stream.clone();
+        let mut chunks_for_timeout = chunks.clone();
+
+        spawn(async move {
+            gloo_timers::future::TimeoutFuture::new(max_duration).await;
+            let _ = stop_recording(
+                &mut Signal::new_in_scope(None::<Vec<u8>>, ScopeId::ROOT),
+                &mut state_for_timeout,
+                &mut last_error_for_timeout,
+                &mut recorder_for_timeout,
+                &mut stream_for_timeout,
+                &mut chunks_for_timeout,
+            );
+        });
+    }
 
     recorder.set(Some(rec));
     state.set(RecordingState::Recording);
