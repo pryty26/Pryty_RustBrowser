@@ -1,3 +1,5 @@
+Discord:
+https://discord.gg/CYNQ25XP8B
 
 # pryty-rustbrowser
 
