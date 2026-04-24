@@ -241,7 +241,7 @@ All gracefully return errors when APIs unavailable.
 Clone and run the demo:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/pryty-rustbrowser
+git clone https://github.com/pryty26/pryty-rustbrowser
 cd pryty-rustbrowser
 cargo run --example demo
 ```
