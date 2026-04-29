@@ -121,11 +121,11 @@ impl AudioQualityConfig {
     }
 }
 
-// 建议增加的功能
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RecordingConfig {
-    pub time_slice: Option<u32>,  // 可配置数据块间隔
-    pub max_duration: Option<u32>, // 最大录音时长
+    pub time_slice: Option<u32>, 
+    pub max_duration: Option<u32>, 
 }
 
 pub struct Recording {
@@ -514,7 +514,7 @@ pub async fn start_rec_with_quality_and_config(
     state.set(RecordingState::Recording);
 
     if let Some(max_duration) = config.and_then(|c| c.max_duration) {
-        let mut data_for_timeout = use_signal(|| None::<Vec<u8>>);
+        let mut data_for_timeout = data.clone();
         let mut state_for_timeout = state.clone();
         let mut last_error_for_timeout = last_error.clone();
         let mut recorder_for_timeout = recorder.clone();
